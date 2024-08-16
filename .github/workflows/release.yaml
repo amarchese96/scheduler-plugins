@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - sophos-v*
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get tag
+        uses: actions-ecosystem/action-get-latest-tag@v1
+        id: vars
+        with:
+          with_initial_version: true
+
+      - name: Build image
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          make local-image RELEASE_VERSION=${RELEASE_VERSION} REGISTRY=${REGISTRY} IMAGE=${IMG}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.vars.outputs.tag }}
+          REGISTRY: ${{ env.REGISTRY }}/unict-cclab
+          IMG: kube-scheduler:${{ steps.vars.outputs.tag }}
+      
+      - name: Push image
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          docker push ${IMG}
+        shell: bash
+        env:
+          IMG: ${{ env.REGISTRY }}/unict-cclab/kube-scheduler:${{ steps.vars.outputs.tag }}
