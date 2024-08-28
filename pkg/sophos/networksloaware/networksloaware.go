@@ -80,7 +80,7 @@ func (pl *NetworkSloAware) Score(ctx context.Context, _ *framework.CycleState, p
 		for _, peerPod := range pods.Items {
 			if sophos.ArePodsNeighbors(pod, &peerPod) {
 				chainsSlos := sophos.GetSharedChainsSlos(pod, &peerPod)
-				rps := sophos.GetAppRequestsPerSecond(pod, &peerPod)
+				rps := sophos.GetAppRequestsPerSecond(ctx, pl.handle, pod, &peerPod)
 
 				for _, chainSlo := range chainsSlos {
 					score -= int64(nodeLatency * (rps + 100) / chainSlo)

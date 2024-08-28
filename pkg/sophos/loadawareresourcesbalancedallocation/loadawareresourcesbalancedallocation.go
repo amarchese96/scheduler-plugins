@@ -1,4 +1,4 @@
-package networkaware
+package loadawareresourcesbalancedallocation
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"math"
 
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -14,54 +13,41 @@ import (
 )
 
 const (
-	Name = "NetworkAware"
+	Name = "LoadAwareResourcesBalancedAllocation"
 )
 
-type NetworkAware struct {
+type LoadAwareResourcesBalancedAllocation struct {
 	handle framework.Handle
 }
 
-var _ = framework.ScorePlugin(&NetworkAware{})
+var _ = framework.ScorePlugin(&LoadAwareResourcesBalancedAllocation{})
 
-func (pl *NetworkAware) Name() string {
+func (pl *LoadAwareResourcesBalancedAllocation) Name() string {
 	return Name
 }
 
-func (pl *NetworkAware) Score(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
-	klog.Infof("scoring node %q for pod %q", nodeName, pod.Name)
-	var score int64
+func (pl *LoadAwareResourcesBalancedAllocation) Score(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+	klog.Infof("Scoring node %q for pod %q", nodeName, pod.Name)
 
 	node, err := pl.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
 	if err != nil {
 		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("error getting info for node %q: %v", nodeName, err))
 	}
 
-	clusterNodes, err := pl.handle.SnapshotSharedLister().NodeInfos().List()
-	if err != nil {
-		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("error getting cluster nodes info: %v", err))
-	}
+	cpuUsageRatio := -(sophos.GetAppCpuUsage(ctx, pl.handle, pod) + sophos.GetNodeCpuUsage(node.Node())) * 100 / float64(node.Allocatable.MilliCPU)
+	memoryUsageRatio := -(sophos.GetAppMemoryUsage(ctx, pl.handle, pod) + sophos.GetNodeMemoryUsage(node.Node())) * 100 / float64(node.Allocatable.Memory)
 
-	for _, clusterNode := range clusterNodes {
-		pods, err := pl.handle.ClientSet().CoreV1().Pods(pod.Namespace).List(ctx, metav1.ListOptions{
-			FieldSelector: "spec.nodeName=" + clusterNode.Node().Name,
-		})
-		if err != nil {
-			return 0, framework.NewStatus(framework.Error, fmt.Sprintf("error getting pods scheduled on node %q", clusterNode.Node().Name))
-		}
-
-		for _, peerPod := range pods.Items {
-			score -= int64(sophos.GetNodeLatency(node.Node(), clusterNode.Node()) * sophos.GetAppTraffic(ctx, pl.handle, pod, &peerPod))
-		}
-	}
+	std := math.Abs((cpuUsageRatio - memoryUsageRatio) / 2)
+	score := int64((1 - std) * float64(framework.MaxNodeScore))
 
 	return score, nil
 }
 
-func (pl *NetworkAware) ScoreExtensions() framework.ScoreExtensions {
+func (pl *LoadAwareResourcesBalancedAllocation) ScoreExtensions() framework.ScoreExtensions {
 	return pl
 }
 
-func (pl *NetworkAware) NormalizeScore(_ context.Context, _ *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+func (pl *LoadAwareResourcesBalancedAllocation) NormalizeScore(_ context.Context, _ *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
 	// Find highest and lowest scores.
 	var highest int64 = -math.MaxInt64
 	var lowest int64 = math.MaxInt64
@@ -91,7 +77,7 @@ func (pl *NetworkAware) NormalizeScore(_ context.Context, _ *framework.CycleStat
 }
 
 func New(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
-	pl := &NetworkAware{
+	pl := &LoadAwareResourcesBalancedAllocation{
 		handle: handle,
 	}
 	return pl, nil

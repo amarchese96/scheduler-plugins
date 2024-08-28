@@ -1,4 +1,4 @@
-package loadaware
+package loadawaremostallocated
 
 import (
 	"context"
@@ -13,20 +13,20 @@ import (
 )
 
 const (
-	Name = "LoadAware"
+	Name = "LoadAwareMostAllocated"
 )
 
-type LoadAware struct {
+type LoadAwareMostAllocated struct {
 	handle framework.Handle
 }
 
-var _ = framework.ScorePlugin(&LoadAware{})
+var _ = framework.ScorePlugin(&LoadAwareMostAllocated{})
 
-func (pl *LoadAware) Name() string {
+func (pl *LoadAwareMostAllocated) Name() string {
 	return Name
 }
 
-func (pl *LoadAware) Score(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+func (pl *LoadAwareMostAllocated) Score(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	klog.Infof("Scoring node %q for pod %q", nodeName, pod.Name)
 
 	node, err := pl.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
@@ -34,20 +34,19 @@ func (pl *LoadAware) Score(ctx context.Context, _ *framework.CycleState, pod *v1
 		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("error getting info for node %q: %v", nodeName, err))
 	}
 
-	cpuUsageRatio := -(sophos.GetAppCpuUsage(pod) + sophos.GetNodeCpuUsage(node.Node())) * 100 / float64(node.Allocatable.MilliCPU)
-	memoryUsageRatio := -(sophos.GetAppMemoryUsage(pod) + sophos.GetNodeMemoryUsage(node.Node())) * 100 / float64(node.Allocatable.Memory)
+	cpuUsageRatio := -(sophos.GetAppCpuUsage(ctx, pl.handle, pod) + sophos.GetNodeCpuUsage(node.Node())) * 100 / float64(node.Allocatable.MilliCPU)
+	memoryUsageRatio := -(sophos.GetAppMemoryUsage(ctx, pl.handle, pod) + sophos.GetNodeMemoryUsage(node.Node())) * 100 / float64(node.Allocatable.Memory)
 
-	std := math.Abs((cpuUsageRatio - memoryUsageRatio) / 2)
-	score := int64((1 - std) * float64(framework.MaxNodeScore))
+	score := int64((cpuUsageRatio*0.5 + memoryUsageRatio*0.5) * float64(framework.MaxNodeScore))
 
 	return score, nil
 }
 
-func (pl *LoadAware) ScoreExtensions() framework.ScoreExtensions {
+func (pl *LoadAwareMostAllocated) ScoreExtensions() framework.ScoreExtensions {
 	return pl
 }
 
-func (pl *LoadAware) NormalizeScore(_ context.Context, _ *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+func (pl *LoadAwareMostAllocated) NormalizeScore(_ context.Context, _ *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
 	// Find highest and lowest scores.
 	var highest int64 = -math.MaxInt64
 	var lowest int64 = math.MaxInt64
@@ -76,9 +75,9 @@ func (pl *LoadAware) NormalizeScore(_ context.Context, _ *framework.CycleState, 
 	return nil
 }
 
-func New(_ runtime.Object, h framework.Handle) (framework.Plugin, error) {
-	pl := &LoadAware{
-		handle: h,
+func New(_ context.Context, _ runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	pl := &LoadAwareMostAllocated{
+		handle: handle,
 	}
 	return pl, nil
 }
