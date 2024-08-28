@@ -2,16 +2,40 @@ package sophos
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
+
+func GetOwnerDeployment(ctx context.Context, handle framework.Handle, pod *v1.Pod) (*appsv1.Deployment, error) {
+	if len(pod.OwnerReferences) == 0 || pod.OwnerReferences[0].Kind != "ReplicaSet" {
+		return nil, fmt.Errorf("no owner replicaSet for pod %s", pod.Name)
+	}
+
+	replicaSet, err := handle.ClientSet().AppsV1().ReplicaSets(pod.Namespace).Get(ctx, pod.OwnerReferences[0].Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("error in getting pod %s replicaSet", pod.Name)
+	}
+
+	if len(replicaSet.OwnerReferences) == 0 {
+		return nil, fmt.Errorf("no owner deployment for replicaSet %s", pod.Name)
+	}
+
+	deployment, err := handle.ClientSet().AppsV1().Deployments(replicaSet.Namespace).Get(ctx, replicaSet.OwnerReferences[0].Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("error in getting replicaSet %s deployment", pod.Name)
+	}
+
+	return deployment, nil
+}
 
 func AreLesserOrderPodsScheduled(ctx context.Context, handle framework.Handle, pod *v1.Pod) bool {
 	namespace := pod.GetNamespace()
@@ -161,39 +185,51 @@ func GetSharedChainsSlos(pod *v1.Pod, peerPod *v1.Pod) []float64 {
 	return chainsSlos
 }
 
-func GetAppCpuUsage(pod *v1.Pod) float64 {
-	cpuUsageAnnotation, ok := pod.Annotations["cpu-usage"]
+func GetAppCpuUsage(ctx context.Context, handle framework.Handle, pod *v1.Pod) float64 {
+	deployment, err := GetOwnerDeployment(ctx, handle, pod)
+	if err != nil {
+		klog.Infof("error getting owner deployment for Pod %s: %s", pod.Name, err.Error())
+		return 0.0
+	}
+
+	cpuUsageAnnotation, ok := deployment.Annotations["cpu-usage"]
 	if !ok {
-		klog.Infof("\"cpu-usage\" annotation not found on pod %s", pod.Name)
+		klog.Infof("\"cpu-usage\" annotation not found on deployment %s", deployment.Name)
 		return 0.0
 	}
 
 	cpuUsage, err := strconv.ParseFloat(cpuUsageAnnotation, 64)
 	if err != nil {
-		klog.Infof("error parsing \"cpu-usage\" annotation of pod %s", pod.Name)
+		klog.Infof("error parsing \"cpu-usage\" annotation of deployment %s", deployment.Name)
 		return 0.0
 	}
 
 	return cpuUsage
 }
 
-func GetAppMemoryUsage(pod *v1.Pod) float64 {
-	memoryUsageAnnotation, ok := pod.Annotations["memory-usage"]
+func GetAppMemoryUsage(ctx context.Context, handle framework.Handle, pod *v1.Pod) float64 {
+	deployment, err := GetOwnerDeployment(ctx, handle, pod)
+	if err != nil {
+		klog.Infof("error getting owner deployment for Pod %s: %s", pod.Name, err.Error())
+		return 0.0
+	}
+
+	memoryUsageAnnotation, ok := deployment.Annotations["memory-usage"]
 	if !ok {
-		klog.Infof("\"memory-usage\" annotation not found on pod %s", pod.Name)
+		klog.Infof("\"memory-usage\" annotation not found on deployment %s", deployment.Name)
 		return 0.0
 	}
 
 	memoryUsage, err := strconv.ParseFloat(memoryUsageAnnotation, 64)
 	if err != nil {
-		klog.Infof("error parsing \"memory-usage\" annotation of pod %s", pod.Name)
+		klog.Infof("error parsing \"memory-usage\" annotation of pod %s", deployment.Name)
 		return 0.0
 	}
 
 	return memoryUsage
 }
 
-func GetAppRequestsPerSecond(pod *v1.Pod, peerPod *v1.Pod) float64 {
+func GetAppRequestsPerSecond(ctx context.Context, handle framework.Handle, pod *v1.Pod, peerPod *v1.Pod) float64 {
 	appGroup, ok := pod.GetLabels()["app-group"]
 	if !ok {
 		klog.Infof("error getting app-group label for pod %s", pod.Name)
@@ -217,22 +253,28 @@ func GetAppRequestsPerSecond(pod *v1.Pod, peerPod *v1.Pod) float64 {
 		return 0.0
 	}
 
+	deployment, err := GetOwnerDeployment(ctx, handle, pod)
+	if err != nil {
+		klog.Infof("error getting owner deployment for pod %s: %s", pod.Name, err.Error())
+		return 0.0
+	}
+
 	rpsAnnotation, ok := pod.Annotations["rps."+peerApp]
 	if !ok {
-		klog.Infof("\"rps.%s\" annotation not found on pod %s", peerApp, pod.Name)
+		klog.Infof("\"rps.%s\" annotation not found on deployment %s", peerApp, deployment.Name)
 		return 0.0
 	}
 
 	rps, err := strconv.ParseFloat(rpsAnnotation, 64)
 	if err != nil {
-		klog.Infof("error parsing \"rps.%s\" annotation of pod %s", peerApp, pod.Name)
+		klog.Infof("error parsing \"rps.%s\" annotation of deployment %s", peerApp, deployment.Name)
 		return 0.0
 	}
 
 	return rps
 }
 
-func GetAppTraffic(pod *v1.Pod, peerPod *v1.Pod) float64 {
+func GetAppTraffic(ctx context.Context, handle framework.Handle, pod *v1.Pod, peerPod *v1.Pod) float64 {
 	appGroup, ok := pod.GetLabels()["app-group"]
 	if !ok {
 		klog.Infof("error getting app-group label for pod %s", pod.Name)
@@ -256,15 +298,21 @@ func GetAppTraffic(pod *v1.Pod, peerPod *v1.Pod) float64 {
 		return 0.0
 	}
 
-	trafficAnnotation, ok := pod.Annotations["traffic."+peerApp]
+	deployment, err := GetOwnerDeployment(ctx, handle, pod)
+	if err != nil {
+		klog.Infof("error getting owner deployment for pod %s: %s", pod.Name, err.Error())
+		return 0.0
+	}
+
+	trafficAnnotation, ok := deployment.Annotations["traffic."+peerApp]
 	if !ok {
-		klog.Infof("\"traffic.%s\" annotation not found on pod %s", peerApp, pod.Name)
+		klog.Infof("\"traffic.%s\" annotation not found on deployment %s", peerApp, deployment.Name)
 		return 0.0
 	}
 
 	traffic, err := strconv.ParseFloat(trafficAnnotation, 64)
 	if err != nil {
-		klog.Infof("error parsing \"traffic.%s\" annotation of pod %s", peerApp, pod.Name)
+		klog.Infof("error parsing \"traffic.%s\" annotation of deployment %s", peerApp, deployment.Name)
 		return 0.0
 	}
 
