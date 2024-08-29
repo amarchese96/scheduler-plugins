@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/scheduler-plugins/pkg/podstate"
 	"sigs.k8s.io/scheduler-plugins/pkg/preemptiontoleration"
 	"sigs.k8s.io/scheduler-plugins/pkg/qos"
+	"sigs.k8s.io/scheduler-plugins/pkg/sophos/loadawaremostallocated"
 	"sigs.k8s.io/scheduler-plugins/pkg/sophos/loadawareresourcesbalancedallocation"
 	"sigs.k8s.io/scheduler-plugins/pkg/sophos/networkaware"
 	"sigs.k8s.io/scheduler-plugins/pkg/sophos/networksloaware"
@@ -66,6 +67,7 @@ func main() {
 		app.WithPlugin(podstate.Name, podstate.New),
 		app.WithPlugin(qos.Name, qos.New),
 		app.WithPlugin(loadawareresourcesbalancedallocation.Name, loadawareresourcesbalancedallocation.New),
+		app.WithPlugin(loadawaremostallocated.Name, loadawaremostallocated.New),
 		app.WithPlugin(networkaware.Name, networkaware.New),
 		app.WithPlugin(networksloaware.Name, networksloaware.New),
 	)
